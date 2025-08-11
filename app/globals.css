@@ -15,7 +15,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;
-    --foreground: #ededed;
+    --foreground: #16e6a7;
   }
 }
 
@@ -24,3 +24,17 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* พื้นที่พิมพ์ใบเสร็จ */
+@media print {
+  @page {
+    size: 80mm auto; /* สำหรับเครื่อง 80mm */
+    margin: 0;
+  }
+  .no-print { display: none !important; }
+  body { background: white; }
+  .receipt { width: 80mm !important; padding: 0 4mm; }
+}
+
+/* เส้นประที่ดูดีบนเครื่องพิมพ์ความร้อน */
+.border-dashed { border-style: dashed; }
