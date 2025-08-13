@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { createClient } from '@/app/lib/supabase/client';
 
 type Product = { id: string; name: string; price: number; category: string | null };
 type CartLine = { productId: string; name: string; unitPrice: number; qty: number };

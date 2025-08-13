@@ -2,14 +2,21 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/client';
+import { createClient } from '@/app/lib/supabase/client';
 
-type Order = { id: string; total: number; closed_at: string; status: 'paid'|'open'|'void'|'refunded' };
+type Order = {
+  id: string;
+  total: number | null;
+  paid_at: string | null;
+  status: 'paid'|'open'|'void'|'refunded';
+  payment_status: 'paid'|'unpaid';
+  paid_method: 'cash'|'transfer'|'promptpay'|'card'|'other'|null;
+};
 type Payment = { order_id: string; method: 'cash'|'transfer'|'promptpay'|'card'|'other'; amount: number };
 type ItemRow = { order_id: string; product_id: string; qty: number; subtotal: number; products: { name: string } | null };
 
 type Summary = { bills: number; sales: number; avgBill: number };
-type MethodSum = { method: Payment['method']; amount: number };
+type MethodSum = { method: NonNullable<Order['paid_method']>; amount: number };
 type TopProduct = { product_id: string; name: string; qty: number; revenue: number };
 type DayRow = { date: string; bills: number; sales: number; avgBill: number };
 
@@ -24,10 +31,9 @@ const shortTH = (d: Date) => d.toLocaleDateString(undefined,{year:'numeric',mont
 export default function ReportsPage() {
   const supabase = createClient();
 
-  // วันที่เริ่มต้น: วันนี้
   const today = useMemo(()=> new Date(), []);
   const [fromStr, setFromStr] = useState<string>(toDateInput(today));
-  const [toStr, setToStr] = useState<string>(toDateInput(today));
+  const [toStr,   setToStr]   = useState<string>(toDateInput(today));
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -50,19 +56,17 @@ export default function ReportsPage() {
       setLoading(true);
       setErr(null);
 
-      const from = new Date(fromStr);
-      const to = new Date(toStr);
-      const fromISO = startOfDayISO(from);
-      const toISO = endOfDayISO(to);
+      const fromISO = startOfDayISO(new Date(fromStr));
+      const toISO   = endOfDayISO(new Date(toStr));
 
-      // 1) Orders
+      // 1) Orders — ใช้ paid_at เป็นหลัก + เงื่อนไขสถานะ paid
       const { data: orders, error: ordErr } = await supabase
         .from('orders')
-        .select('id,total,closed_at,status')
-        .eq('status','paid')
-        .gte('closed_at', fromISO)
-        .lte('closed_at', toISO)
-        .order('closed_at', { ascending: true }) as unknown as { data: Order[], error: any };
+        .select('id,total,paid_at,status,payment_status,paid_method')
+        .or('status.eq.paid,payment_status.eq.paid')   // อย่างใดอย่างหนึ่งเป็น paid
+        .gte('paid_at', fromISO)                       // อยู่ในช่วงจ่ายเงิน
+        .lte('paid_at', toISO)
+        .order('paid_at', { ascending: true }) as unknown as { data: Order[], error: any };
       if (ordErr) throw ordErr;
 
       const orderIds = orders.map(o => o.id);
@@ -71,10 +75,11 @@ export default function ReportsPage() {
       const avgBill = bills ? sales / bills : 0;
       setSummary({ bills, sales, avgBill });
 
-      // 2) By day
+      // 2) By day (อิง paid_at)
       const dayMap = new Map<string, {bills:number; sales:number;}>();
       orders.forEach(o => {
-        const key = new Date(o.closed_at).toISOString().slice(0,10);
+        const key = o.paid_at ? o.paid_at.slice(0,10) : '';
+        if (!key) return;
         const cur = dayMap.get(key) || { bills: 0, sales: 0 };
         cur.bills += 1;
         cur.sales += Number(o.total||0);
@@ -91,21 +96,33 @@ export default function ReportsPage() {
         return;
       }
 
-      // 3) Payments by method
+      // 3) Payments by method (ถ้ามีตาราง payments)
       const { data: pays, error: payErr } = await supabase
         .from('payments')
         .select('order_id, method, amount')
-        .in('order_id', orderIds) as unknown as { data: Payment[], error: any };
-      if (payErr) throw payErr;
+        .in('order_id', orderIds) as unknown as { data: Payment[]|null, error: any };
 
-      const methodMap = new Map<Payment['method'], number>();
-      pays.forEach(p => methodMap.set(p.method, (methodMap.get(p.method)||0) + Number(p.amount||0)));
-      const methodRows: MethodSum[] = Array.from(methodMap.entries())
-        .map(([method, amount]) => ({ method, amount }))
-        .sort((a,b)=> b.amount - a.amount);
+      let methodRows: MethodSum[] = [];
+      if (!payErr && pays && pays.length > 0) {
+        const methodMap = new Map<NonNullable<Order['paid_method']>, number>();
+        pays.forEach(p => methodMap.set(p.method, (methodMap.get(p.method)||0) + Number(p.amount||0)));
+        methodRows = Array.from(methodMap.entries())
+          .map(([method, amount]) => ({ method, amount }))
+          .sort((a,b)=> b.amount - a.amount);
+      } else {
+        // ⭐ Fallback: ถ้าไม่มี payments ให้สรุปจาก orders.paid_method แทน
+        const m2 = new Map<NonNullable<Order['paid_method']>, number>();
+        orders.forEach(o => {
+          if (!o.paid_method) return;
+          m2.set(o.paid_method, (m2.get(o.paid_method)||0) + Number(o.total||0));
+        });
+        methodRows = Array.from(m2.entries())
+          .map(([method, amount]) => ({ method, amount }))
+          .sort((a,b)=> b.amount - a.amount);
+      }
       setByMethod(methodRows);
 
-      // 4) Top products
+      // 4) Top products (จากรายการในบิลที่เลือก)
       const { data: items, error: itemsErr } = await supabase
         .from('order_items')
         .select('order_id, product_id, qty, subtotal, products(name)')
@@ -132,48 +149,38 @@ export default function ReportsPage() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
-  const methodLabel = (m: Payment['method']) =>
+  const methodLabel = (m: NonNullable<Order['paid_method']>) =>
     m==='cash'?'เงินสด':m==='transfer'?'โอน':m==='promptpay'?'พร้อมเพย์':m==='card'?'บัตร':'อื่นๆ';
 
-  // ⭐ ปุ่มส่งออก CSV
   const exportCSV = () => {
-    // ช่วย escape ค่าที่มีคอมมา/ขึ้นบรรทัดใหม่/อัญประกาศ
     const esc = (v: any) => {
       const s = String(v ?? '');
       return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
     };
 
     const lines: string[] = [];
-    lines.push(['ช่วง', fromStr, toStr, 'สร้างเมื่อ', new Date().toLocaleString()].map(esc).join(','));
-    lines.push('');
-
+    lines.push(['ช่วง', fromStr, toStr, 'สร้างเมื่อ', new Date().toLocaleString()].map(esc).join(',')); lines.push('');
     lines.push(['สรุปยอด', 'จำนวนบิล', 'ยอดขายรวม(฿)', 'เฉลี่ย/บิล(฿)'].map(esc).join(','));
-    lines.push(['', summary.bills, summary.sales.toFixed(2), summary.avgBill.toFixed(2)].map(esc).join(','));
-    lines.push('');
+    lines.push(['', summary.bills, summary.sales.toFixed(2), summary.avgBill.toFixed(2)].map(esc).join(',')); lines.push('');
 
     lines.push(['ยอดตามวิธีชำระเงิน'].map(esc).join(','));
     lines.push(['ช่องทาง','ยอด(฿)'].map(esc).join(','));
-    byMethod.forEach(m => lines.push([methodLabel(m.method), m.amount.toFixed(2)].map(esc).join(',')));
-    lines.push('');
+    byMethod.forEach(m => lines.push([methodLabel(m.method), m.amount.toFixed(2)].map(esc).join(','))); lines.push('');
 
     lines.push(['เมนูขายดี (Top 15)'].map(esc).join(','));
     lines.push(['เมนู','จำนวน','ยอดขาย(฿)'].map(esc).join(','));
-    topProducts.forEach(p => lines.push([p.name, p.qty, p.revenue.toFixed(2)].map(esc).join(',')));
-    lines.push('');
+    topProducts.forEach(p => lines.push([p.name, p.qty, p.revenue.toFixed(2)].map(esc).join(','))); lines.push('');
 
     lines.push(['สรุปรายวัน'].map(esc).join(','));
     lines.push(['วันที่','บิล','ยอดขาย(฿)','เฉลี่ย/บิล(฿)'].map(esc).join(','));
     byDay.forEach(d => lines.push([d.date, d.bills, d.sales.toFixed(2), d.avgBill.toFixed(2)].map(esc).join(',')));
 
-    const csv = '\ufeff' + lines.join('\n'); // BOM เพื่อให้ Excel ไทยอ่านได้
+    const csv = '\ufeff' + lines.join('\n'); // BOM เพื่อ Excel
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `รายงาน_${fromStr}_${toStr}.csv`;
-    a.click();
+    const a = document.createElement('a'); a.href = url; a.download = `รายงาน_${fromStr}_${toStr}.csv`; a.click();
     URL.revokeObjectURL(url);
   };
 

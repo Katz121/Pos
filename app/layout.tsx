@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import './globals.css';
 import Link from 'next/link';
 
 
@@ -34,6 +33,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/recipes" className="px-3 py-1 rounded hover:bg-gray-100">สูตรเมนู</Link>
               <Link href="/pos" className="px-3 py-1 rounded hover:bg-gray-100">หน้าร้าน</Link>
               <Link href="/queue" className="px-3 py-1 rounded hover:bg-gray-100">คิวหน้าบาร์</Link>
+              <Link href="/products" className="px-3 py-1 rounded hover:bg-gray-100 dark:hover:bg-neutral-800">เมนู</Link>
+              <Link href="/orders" className="px-3 py-1 rounded hover:bg-gray-100 dark:hover:bg-neutral-800">ดูบิล</Link>
+
 
 
             </div>
